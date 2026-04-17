@@ -1,122 +1,73 @@
-import streamlit as st
-import yfinance as yf
-import plotly.graph_objects as go
-import pandas as pd
-import numpy as np
-from sklearn.linear_model import LinearRegression
+# 5. 繪製圖表 (強化視覺線條與七點連動懸停)
+fig = go.Figure()
 
-# 1. 網頁配置
-st.set_page_config(page_title="財富彩虹-破解優化版", layout="wide")
+# 定義彩虹層級的名稱與顏色
+# 順序：+3s, +2s, +1s, Mid, -1s, -2s, -3s
+line_configs = [
+    ('p3s', '極度高估 (+3σ)', 'rgba(255, 0, 0, 1)', 'rgba(255, 0, 0, 0.1)'),
+    ('p2s', '高估 (+2σ)', 'rgba(255, 165, 0, 1)', 'rgba(255, 165, 0, 0.1)'),
+    ('p1s', '偏高 (+1σ)', 'rgba(255, 255, 0, 1)', 'rgba(255, 255, 0, 0.05)'),
+    ('Mid', '趨勢中線 (Mid)', 'rgba(0, 255, 0, 1)', 'rgba(0, 255, 0, 0.05)'),
+    ('m1s', '偏低 (-1σ)', 'rgba(0, 0, 255, 1)', 'rgba(0, 0, 255, 0.1)'),
+    ('m2s', '低估 (-2σ)', 'rgba(128, 0, 128, 1)', 'rgba(128, 0, 128, 0.1)'),
+    ('m3s', '極度低估 (-3σ)', 'rgba(75, 0, 130, 1)', None)
+]
 
-# 套用 JSON 中的專業深色美學
-st.markdown("""
-    <style>
-    .stApp { background-color: #0d1117; color: #c9d1d9; }
-    .data-card {
-        background-color: #161b22; border: 1px solid #30363d;
-        border-radius: 8px; padding: 12px; text-align: center;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-    }
-    .metric-val { font-size: 24px; font-weight: 600; color: #58a6ff; }
-    .metric-label { font-size: 13px; color: #8b949e; }
-    </style>
-    """, unsafe_allow_html=True)
-
-# 2. 頂部輸入區
-col1, col2, col3 = st.columns([3, 2, 1])
-with col1:
-    ticker_input = st.text_input("輸入代碼 (例如: NVDA, 2330.TW)", "NVDA").upper()
-with col2:
-    period = st.selectbox("計算週期", ["3y", "5y", "10y"], index=0)
-with col3:
-    is_log = st.checkbox("對數模式 (Log)", value=True)
-
-# 3. 核心算法 (整合 JSON 中的回歸邏輯)
-@st.cache_data(ttl=3600)
-def get_optimized_data(symbol, period_str):
-    try:
-        df = yf.Ticker(symbol).history(period=period_str)
-        if df.empty: return None, "無數據"
-        
-        df['Day_Index'] = np.arange(len(df))
-        X = df[['Day_Index']].values
-        # 根據 JSON 邏輯，使用對數股價進行回歸
-        y = np.log(df['Close'].values) if is_log else df['Close'].values
-        
-        model = LinearRegression().fit(X, y)
-        df['Pred'] = model.predict(X)
-        std = (y - df['Pred']).std()
-        
-        # --- 計算年化報酬率 (從斜率推算) ---
-        # 假設一年有 252 個交易日
-        slope = model.coef_[0]
-        if is_log:
-            ann_return = (np.exp(slope * 252) - 1) * 100
-        else:
-            ann_return = (slope * 252 / df['Close'].mean()) * 100
-            
-        return (df, std, ann_return), None
-    except Exception as e:
-        return None, str(e)
-
-res, err = get_optimized_data(ticker_input, period)
-
-if res:
-    df, sigma, ann_r = res
-    curr_close = df['Close'].iloc[-1]
-    last_pred = df['Pred'].iloc[-1]
+# A. 先畫區間填滿 (為了讓填滿在線條下面)
+for i in range(len(line_configs) - 1):
+    up_key = line_configs[i][0]
+    low_key = line_configs[i+1][0]
+    fill_col = line_configs[i][3]
     
-    # 計算 Z-Score
-    curr_y = np.log(curr_close) if is_log else curr_close
-    z_score = (curr_y - last_pred) / sigma
-
-    # 4. 頂部看板 (模仿專業金融介面)
-    m1, m2, m3, m4 = st.columns(4)
-    m1.markdown(f'<div class="data-card"><div class="metric-label">當前收盤價</div><div class="metric-val">${curr_close:.2f}</div></div>', unsafe_allow_html=True)
-    m2.markdown(f'<div class="data-card"><div class="metric-label">當前水位 (Z-Score)</div><div class="metric-val">{z_score:.2f} σ</div></div>', unsafe_allow_html=True)
-    m3.markdown(f'<div class="data-card"><div class="metric-label">預估年化報酬率</div><div class="metric-val">{ann_r:.1f}%</div></div>', unsafe_allow_html=True)
-    m4.markdown(f'<div class="data-card"><div class="metric-label">標準差 (σ)</div><div class="metric-val">{sigma:.4f}</div></div>', unsafe_allow_html=True)
-
-    # 5. 繪圖 (專業漸層配色)
-    fig = go.Figure()
-    
-    def get_y(val): return np.exp(val) if is_log else val
-
-    # 定義彩虹層 (使用 JSON 風格的高透明度配色)
-    layers = [
-        (3, 2, 'rgba(255, 0, 0, 0.12)'),      # 極度高估
-        (2, 1, 'rgba(255, 165, 0, 0.12)'),    # 高估
-        (1, 0, 'rgba(255, 255, 0, 0.08)'),    # 偏高
-        (0, -1, 'rgba(0, 255, 0, 0.08)'),     # 合理
-        (-1, -2, 'rgba(0, 0, 255, 0.12)'),    # 偏低
-        (-2, -3, 'rgba(128, 0, 128, 0.12)')   # 低估
-    ]
-
-    for up_sig, low_sig, color in layers:
-        fig.add_trace(go.Scatter(
-            x=df.index, y=get_y(df['Pred'] + up_sig * sigma),
-            mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'
-        ))
-        fig.add_trace(go.Scatter(
-            x=df.index, y=get_y(df['Pred'] + low_sig * sigma),
-            fill='tonexty', fillcolor=color, line=dict(width=0), showlegend=False
-        ))
-
-    # 主股價線條
     fig.add_trace(go.Scatter(
-        x=df.index, y=df['Close'], name="Price",
-        line=dict(color='#ffffff', width=1.8),
-        hovertemplate="日期: %{x}<br>價格: %{y:.2f}<extra></extra>"
+        x=df.index, y=get_y(df[up_key]), mode='lines', 
+        line=dict(width=0), showlegend=False, hoverinfo='skip'
+    ))
+    fig.add_trace(go.Scatter(
+        x=df.index, y=get_y(df[low_key]), fill='tonexty', 
+        fillcolor=fill_col, line=dict(width=0), showlegend=False, hoverinfo='skip'
     ))
 
-    fig.update_layout(
-        template="plotly_dark", height=600, margin=dict(t=20, b=0),
-        hovermode="x unified",
-        xaxis=dict(showgrid=False, rangeslider=dict(visible=True, thickness=0.04)),
-        yaxis=dict(gridcolor='#23282e', side='right', type='log' if is_log else 'linear')
-    )
+# B. 再畫「七條邊界線」 (這能解決模糊感，產生清晰的線條)
+for key, name, color, _ in line_configs:
+    fig.add_trace(go.Scatter(
+        x=df.index, 
+        y=get_y(df[key]),
+        name=name,
+        mode='lines',
+        line=dict(color=color, width=1), # 這裡設定線條顏色與寬度
+        hovertemplate=f"{name}: %{{y:.2f}}<extra></extra>"
+    ))
 
-    st.plotly_chart(fig, use_container_width=True)
+# C. 最後畫收盤價 (白色加粗，並置於最頂層)
+fig.add_trace(go.Scatter(
+    x=df.index, 
+    y=df['Close'], 
+    name="收盤價",
+    mode='lines+markers',
+    marker=dict(size=4, color='white', opacity=0), # 平時隱藏圓點，懸停才出現
+    line=dict(color='white', width=2.5),
+    hovertemplate="<b>日期: %{x}</b><br>收盤價: %{y:.2f}<extra></extra>"
+))
 
-else:
-    st.error(f"無法載入：{err}")
+# 6. 圖表版面設定 (關鍵在於 hovermode='x')
+fig.update_layout(
+    template="plotly_dark",
+    height=650,
+    margin=dict(t=50, b=0, l=10, r=10),
+    hovermode="x", # 關鍵：滑鼠指到 X 軸某點，會觸發該點所有線條的圓圈與數值
+    xaxis=dict(
+        showgrid=False, 
+        rangeslider=dict(visible=True, thickness=0.04),
+        spikemode="across", spikethickness=1, spikedash="dot", spikecolor="#999" # 垂直輔助線
+    ),
+    yaxis=dict(
+        gridcolor='#23282e', 
+        side='right', 
+        type='log' if is_log else 'linear',
+        fixedrange=False
+    ),
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+)
+
+st.plotly_chart(fig, use_container_width=True)
