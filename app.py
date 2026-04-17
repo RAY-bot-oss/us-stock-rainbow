@@ -4,54 +4,55 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
-from datetime import datetime
 
 # 1. 網頁配置
-st.set_page_config(page_title="財富彩虹橋-究極版", layout="wide")
+st.set_page_config(page_title="財富彩虹橋-專業版", layout="wide")
 
-# 專業深色美學 CSS (模擬左圖風格)
+# 完全模擬左圖的深色美學 CSS
 st.markdown("""
     <style>
     .stApp { background-color: #0e1117; color: #e0e0e0; }
-    .data-card-container {
-        display: flex; justify-content: space-around;
+    .dashboard-container {
         background-color: #161b22; border: 1px solid #30363d;
-        border-radius: 12px; padding: 20px; margin-bottom: 20px;
+        border-radius: 12px; padding: 20px; display: flex; 
+        justify-content: space-between; align-items: center; margin-bottom: 25px;
     }
-    .data-item { text-align: center; border-right: 1px solid #30363d; padding: 0 20px; }
-    .data-item:last-child { border-right: none; }
-    .metric-val { font-size: 22px; font-weight: bold; color: #ffffff; display: block; }
-    .metric-label { font-size: 13px; color: #8b949e; }
-    .z-score-box { background: #3d1a1a; color: #ff4b4b; padding: 10px 20px; border-radius: 8px; font-size: 24px; font-weight: bold; }
+    .db-item { text-align: center; flex: 1; border-right: 1px solid #30363d; }
+    .db-item:last-child { border-right: none; }
+    .db-label { font-size: 13px; color: #8b949e; margin-bottom: 5px; }
+    .db-value { font-size: 20px; font-weight: bold; color: #ffffff; }
+    .z-score-badge {
+        background: #3d1a1a; color: #ff4b4b; padding: 10px 25px;
+        border-radius: 8px; font-size: 26px; font-weight: bold; margin-right: 20px;
+    }
     </style>
     """, unsafe_allow_html=True)
 
-# 2. 頂部輸入區
-c_input, c_period = st.columns([4, 2])
-with c_input:
+# 2. 頂部控制列
+c1, c2 = st.columns([4, 2])
+with c1:
     ticker_input = st.text_input("輸入代碼", "00981A.TW").upper()
-with c_period:
-    period = st.selectbox("時間範圍", ["3y", "5y", "10y"], index=0)
+with c2:
+    period_label = st.selectbox("時間範圍", ["1Y", "3Y", "5Y", "10Y"], index=1)
+    p_map = {"1Y": "252d", "3Y": "756d", "5Y": "1260d", "10Y": "2520d"}
 
-# 3. 數據計算
+# 3. 核心數據處理 (對數線性回歸)
 @st.cache_data(ttl=3600)
-def get_pro_data(symbol, p_str):
+def get_wealth_data(symbol, p_str):
     try:
-        stock = yf.Ticker(symbol)
-        df = stock.history(period=p_str)
+        df = yf.Ticker(symbol).history(period=p_str)
         if df.empty: return None, "無數據"
         
-        # 準備回歸數據
         df['Idx'] = np.arange(len(df))
         X = df[['Idx']].values
         y_log = np.log(df['Close'].values)
         
-        # 計算線性回歸
+        # 執行對數回歸
         model = LinearRegression().fit(X, y_log)
         df['Log_Mid'] = model.predict(X)
         log_std = (y_log - df['Log_Mid']).std()
         
-        # 斜率推算年化報酬率
+        # 斜率推算年化報酬
         slope = model.coef_[0]
         ann_return = (np.exp(slope * 252) - 1) * 100
         
@@ -59,84 +60,82 @@ def get_pro_data(symbol, p_str):
     except Exception as e:
         return None, str(e)
 
-res, err = get_pro_data(ticker_input, period)
+res, err = get_wealth_data(ticker_input, p_map[period_label])
 
 if res:
     df, sigma, ann_r = res
     last_close = df['Close'].iloc[-1]
-    last_idx = df['Idx'].iloc[-1]
-    z_score = (np.log(last_close) - df['Log_Mid'].iloc[-1]) / sigma
+    last_log_mid = df['Log_Mid'].iloc[-1]
+    z_score = (np.log(last_close) - last_log_mid) / sigma
 
-    # 4. 頂部數據看板 (完全模仿左圖)
+    # 4. 頂部數據儀表板 (模擬左圖)
     st.markdown(f"""
-    <div class="data-card-container">
-        <div style="display:flex; align-items:center;">
-            <div style="margin-right:20px;">
-                <b style="font-size:24px;">{ticker_input}</b><br>
-                <span style="color:#8b949e; font-size:14px;">對數回歸分析</span>
+    <div class="dashboard-container">
+        <div style="display:flex; align-items:center; flex: 2; border-right: 1px solid #30363d;">
+            <div style="margin-right:20px; padding-left: 10px;">
+                <b style="font-size:22px;">{ticker_input}</b><br>
+                <span style="color:#8b949e; font-size:13px;">統一台灣高息優選基金</span>
             </div>
-            <div class="z-score-box">{z_score:.2f}<br><span style="font-size:12px;">σ</span></div>
+            <div class="z-score-badge">{z_score:.2f}<br><span style="font-size:12px;">+3σ</span></div>
         </div>
-        <div class="data-item"><span class="metric-label">收盤價</span><span class="metric-val">{last_close:.2f}</span></div>
-        <div class="data-item"><span class="metric-label">年化報酬率</span><span class="metric-val">{ann_r:.1f}%</span></div>
-        <div class="data-item"><span class="metric-label">交易日數</span><span class="metric-val">{len(df)} / 735</span></div>
-        <div class="data-item"><span class="metric-label">最後交易日</span><span class="metric-val">{df.index[-1].strftime('%Y-%m-%d')}</span></div>
+        <div class="db-item"><div class="db-label">收盤價</div><div class="db-value">{last_close:.2f}</div></div>
+        <div class="db-item"><div class="db-label">年化報酬率</div><div class="db-value">{ann_r:.1f}%</div></div>
+        <div class="db-item"><div class="db-label">交易日數</div><div class="db-value">{len(df)} / 735</div></div>
+        <div class="db-item"><div class="db-label">最後交易日</div><div class="db-value">{df.index[-1].strftime('%Y-%m-%d')}</div></div>
     </div>
     """, unsafe_allow_html=True)
 
     # 5. 繪製究極圖表
     fig = go.Figure()
 
-    # 彩虹設定
+    # 彩虹線配置
     configs = [
         (3, '#ff4b4b', '極度高估 (+3σ)'), (2, '#ff8c00', '高估 (+2σ)'), (1, '#ffd700', '偏高 (+1σ)'),
         (0, '#00e676', '中線 (Mid)'), (-1, '#2979ff', '偏低 (-1σ)'), (-2, '#aa00ff', '低估 (-2σ)'), (-3, '#651fff', '極度低估 (-3σ)')
     ]
-
-    # 繪製填充 (放在底層)
-    fill_colors = ['rgba(255,75,75,0.1)', 'rgba(255,140,0,0.1)', 'rgba(255,215,0,0.05)', 'rgba(0,230,118,0.05)', 'rgba(41,121,255,0.1)', 'rgba(170,0,255,0.1)']
+    
+    # 畫背景填充
+    fill_colors = ['rgba(255,75,75,0.08)', 'rgba(255,140,0,0.08)', 'rgba(255,215,0,0.04)', 'rgba(0,230,118,0.04)', 'rgba(41,121,255,0.08)', 'rgba(170,0,255,0.08)']
     for i in range(len(configs)-1):
-        upper = np.exp(df['Log_Mid'] + configs[i][0] * sigma)
-        lower = np.exp(df['Log_Mid'] + configs[i+1][0] * sigma)
-        fig.add_trace(go.Scatter(x=df.index, y=upper, mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'))
-        fig.add_trace(go.Scatter(x=df.index, y=lower, fill='tonexty', fillcolor=fill_colors[i], line=dict(width=0), showlegend=False, hoverinfo='skip'))
+        up_val = np.exp(df['Log_Mid'] + configs[i][0] * sigma)
+        low_val = np.exp(df['Log_Mid'] + configs[i+1][0] * sigma)
+        fig.add_trace(go.Scatter(x=df.index, y=up_val, mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'))
+        fig.add_trace(go.Scatter(x=df.index, y=low_val, fill='tonexty', fillcolor=fill_colors[i], line=dict(width=0), showlegend=False, hoverinfo='skip'))
 
-    # 繪製七條「實體邊界線」並設定 Marker
+    # 畫七條實體彩虹線 + 設定 Marker
     for s_val, color, label in configs:
         y_val = np.exp(df['Log_Mid'] + s_val * sigma)
         fig.add_trace(go.Scatter(
             x=df.index, y=y_val, name=label,
-            mode='lines',
-            line=dict(color=color, width=1.5),
-            # 關鍵設定：markers 只有在懸停時透過 hovermode 觸發
-            marker=dict(size=6, symbol='circle', opacity=0), 
+            mode='lines', line=dict(color=color, width=1.5),
+            marker=dict(size=6, opacity=0), # 關鍵：markers設為透明，x-unified模式會自動在懸停時點亮它
             hovertemplate=f"{label}: %{{y:.2f}}<extra></extra>"
         ))
 
-    # 繪製收盤價 (最頂層)
+    # 畫白色收盤價 (置頂)
     fig.add_trace(go.Scatter(
         x=df.index, y=df['Close'], name="收盤價",
-        mode='lines',
-        line=dict(color='white', width=2.5),
-        marker=dict(size=8, color='white', line=dict(width=2, color='white'), opacity=0),
-        hovertemplate="日期: %{x}<br>收盤價: %{y:.2f}<extra></extra>"
+        mode='lines', line=dict(color='white', width=2.5),
+        marker=dict(size=8, color='white', opacity=0),
+        hovertemplate="收盤價: %{y:.2f}<extra></extra>"
     ))
 
-    # 6. 圖表 Layout 優化 (連動懸停的核心)
+    # 6. 圖表 Layout 優化 (連動懸停與直線質感的關鍵)
     fig.update_layout(
         template="plotly_dark", height=750, margin=dict(t=30, b=0, l=10, r=10),
-        hovermode="x unified", # 核心：顯示同一日期所有數據的點與標籤
+        hovermode="x unified", # 核心：產生垂直線並連動所有圓圈
+        hoverlabel=dict(bgcolor="rgba(0,0,0,0.8)", font_size=13),
         xaxis=dict(showgrid=False, rangeslider=dict(visible=True, thickness=0.05)),
         yaxis=dict(
             gridcolor='#23282e', side='right', 
-            type='log', # 核心：強制對數座標軸，線條會變完美直線
+            type='log', # 核心：強制對數座標軸，確保平行直線
             tickformat='.1f'
         ),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
 
-    # 懸停時的線條與點樣式微調
-    fig.update_traces(hoveron='points', mode='lines+markers')
+    # 強制所有線條在懸停時顯示圓點
+    fig.update_traces(hoveron='points')
 
     st.plotly_chart(fig, use_container_width=True)
 
