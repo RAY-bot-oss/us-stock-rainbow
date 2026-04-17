@@ -5,57 +5,50 @@ import pandas as pd
 import numpy as np
 from sklearn.linear_model import LinearRegression
 
-# 1. 網頁配置與自定義 CSS (完全還原左圖看板質感)
-st.set_page_config(page_title="財富彩虹橋-專業版", layout="wide")
+# 1. 網頁配置與基礎 CSS (簡潔風)
+st.set_page_config(page_title="財富彩虹橋", layout="wide")
 
 st.markdown("""
     <style>
     .stApp { background-color: #0e1117; color: #e0e0e0; }
     .dashboard-container {
-        background-color: #161b22; border: 1px solid #30363d;
-        border-radius: 12px; padding: 15px 25px; display: flex; 
-        justify-content: space-between; align-items: center; margin-bottom: 20px;
+        display: flex; gap: 20px; margin-bottom: 20px; align-items: center;
     }
-    .db-item { text-align: center; flex: 1; border-right: 1px solid #333; }
-    .db-item:last-child { border-right: none; }
-    .db-label { font-size: 13px; color: #8b949e; margin-bottom: 4px; }
-    .db-value { font-size: 20px; font-weight: bold; color: #ffffff; }
+    .db-title { font-size: 24px; font-weight: bold; color: #ffffff; }
     .z-score-badge {
-        background: rgba(255, 75, 75, 0.15); color: #ff4b4b; 
-        padding: 8px 20px; border-radius: 8px; text-align: center;
-        min-width: 80px; margin-right: 25px; border: 1px solid #ff4b4b;
+        background: rgba(255, 215, 0, 0.1); color: #ffd700; 
+        padding: 5px 15px; border-radius: 6px; font-size: 16px; border: 1px solid #ffd700;
     }
+    .db-info { font-size: 14px; color: #8b949e; }
     </style>
     """, unsafe_allow_html=True)
 
-# 2. 頂部輸入區 (整合美股/台股自動處理)
+# 2. 輸入與時間範圍選擇 (簡潔佈局)
 col_input, col_period = st.columns([4, 2])
 with col_input:
-    raw_ticker = st.text_input("輸入代碼 (例如: 00981A, AAPL, 2330)", "00981A").upper()
-    # 自動補齊台股後綴
-    if raw_ticker.isdigit() or raw_ticker.endswith('A') or raw_ticker.endswith('B'):
+    raw_ticker = st.text_input("輸入代碼", "00981A").upper()
+    if raw_ticker.isdigit() or raw_ticker.endswith('A'):
         ticker_input = f"{raw_ticker}.TW"
     else:
         ticker_input = raw_ticker
 
 with col_period:
-    period_label = st.selectbox("時間範圍", ["1Y (245天)", "3Y (735天)", "5Y (1225天)"], index=1)
-    # 根據你提供的 JSON，3Y 對應的是 735 個交易日
-    days_map = {"1Y (245天)": 245, "3Y (735天)": 735, "5Y (1225天)": 1225}
+    period_label = st.selectbox("時間範圍", ["1Y", "3Y", "5Y"], index=1)
+    days_map = {"1Y": 245, "3Y": 735, "5Y": 1225}
     target_days = days_map[period_label]
 
-# 3. 數據獲取與對數回歸算法 (核心大腦)
+# 3. 核心大腦：對數線性回歸 (精確計算)
 @st.cache_data(ttl=3600)
 def get_calibrated_data(symbol, days):
     try:
-        # 抓取較長數據以確保 tail(days) 準確
-        df = yf.Ticker(symbol).history(period="10y")
-        if df.empty: return None, "找不到該標的數據"
+        # 下載較長數據以切割精確日數
+        df_raw = yf.Ticker(symbol).history(period="10y")
+        if df_raw.empty: return None, "找不到數據"
         
-        # 根據所選範圍切割數據
-        df = df.tail(days).copy()
+        # 只取最後所需的日數 (對齊 trade_days_used)
+        df = df_raw.tail(days).copy()
         
-        # 執行與 Tomosware 一致的 Log 線性回歸
+        # 執行 Log 線性回歸
         df['X'] = np.arange(len(df))
         X_reg = df[['X']].values
         y_log = np.log(df['Close'].values)
@@ -64,95 +57,85 @@ def get_calibrated_data(symbol, days):
         df['Mid_Log'] = model.predict(X_reg)
         sigma = (y_log - df['Mid_Log']).std()
         
-        # 年化報酬率計算
+        # 計算 Z-Score
+        last_close = df['Close'].iloc[-1]
+        last_log_mid = df['Mid_Log'].iloc[-1]
+        curr_z = (np.log(last_close) - last_log_mid) / sigma
+        
+        # 報酬率
         slope = model.coef_[0]
         ann_return = (np.exp(slope * 252) - 1) * 100
         
-        return (df, sigma, ann_return, symbol), None
+        return (df, sigma, ann_return, symbol, curr_z), None
     except Exception as e:
         return None, str(e)
 
 res_data, err = get_calibrated_data(ticker_input, target_days)
 
 if res_data:
-    df, std, ann_r, final_ticker = res_data
+    df, std, ann_r, final_ticker, curr_z = res_data
     last_close = df['Close'].iloc[-1]
-    last_log_mid = df['Mid_Log'].iloc[-1]
-    curr_z = (np.log(last_close) - last_log_mid) / std
     
-    # 名稱修正 (針對 00981A)
-    display_name = "統一台灣高息優選基金" if "00981A" in final_ticker else final_ticker
-
-    # 4. 頂部儀表板 (還原左圖五大指標)
+    # 看板資訊
     st.markdown(f"""
     <div class="dashboard-container">
-        <div style="display:flex; align-items:center; flex: 2; border-right: 1px solid #333;">
-            <div style="margin-right:20px;">
-                <b style="font-size:22px;">{final_ticker.replace('.TW','')}</b><br>
-                <span style="color:#8b949e; font-size:13px;">{display_name}</span>
-            </div>
-            <div class="z-score-badge">
-                <div style="font-size:20px;">{curr_z:.2f}</div>
-                <div style="font-size:10px; opacity:0.8;">{"+3σ" if curr_z > 3 else "Z-Score"}</div>
-            </div>
+        <div class="db-title">{final_ticker.replace('.TW','')}</div>
+        <div class="z-score-badge">Z-Score: {curr_z:.2f}</div>
+        <div class="db-info">
+            年化報酬: {ann_r:.1f}% | 收盤價: {last_close:.2f} | 交易日數: {len(df)} 天
         </div>
-        <div class="db-item"><div class="db-label">收盤價</div><div class="db-value">{last_close:.2f}</div></div>
-        <div class="db-item"><div class="db-label">年化報酬率</div><div class="db-value">{ann_r:.1f}%</div></div>
-        <div class="db-item"><div class="db-label">交易日數</div><div class="db-value">{len(df)} / {target_days}</div></div>
-        <div class="db-item"><div class="db-label">最後交易日</div><div class="db-value">{df.index[-1].strftime('%Y-%m-%d')}</div></div>
     </div>
     """, unsafe_allow_html=True)
 
-    # 5. 繪製圖表 (強制平行直線與八點連動懸停)
+    # 4. 繪製圖表：標準 Tomosware 簡潔直線風格
     fig = go.Figure()
 
-    # 彩虹線配置 (Sigma, 顏色, 標籤)
+    # 彩虹線配置 (Sigma 值, 顏色, 標籤)
     line_configs = [
-        (3, '#ff4b4b', '極度高估 (+3σ)'), (2, '#ff8c00', '高估 (+2σ)'), (1, '#ffd700', '偏高 (+1σ)'),
-        (0, '#00e676', '中線 (Mid)'), (-1, '#2979ff', '偏低 (-1σ)'), (-2, '#aa00ff', '低估 (-2σ)'), (-3, '#651fff', '極度低估 (-3σ)')
+        (3, '#ff4b4b', 'Over Valued (+3)'), (2, '#ff8c00', 'Over Valued (+2)'), (1, '#ffd700', 'Over Valued (+1)'),
+        (0, '#00e676', 'Mid'), 
+        (-1, '#2979ff', 'Under Valued (-1)'), (-2, '#aa00ff', 'Under Valued (-2)'), (-3, '#651fff', 'Under Valued (-3)')
     ]
 
-    # A. 繪製半透明填充區
-    fill_colors = ['rgba(255,75,75,0.08)', 'rgba(255,140,0,0.08)', 'rgba(255,215,0,0.04)', 'rgba(0,230,118,0.04)', 'rgba(41,121,255,0.08)', 'rgba(170,0,255,0.08)']
-    for i in range(len(line_configs)-1):
-        up = np.exp(df['Mid_Log'] + line_configs[i][0] * std)
-        low = np.exp(df['Mid_Log'] + line_configs[i+1][0] * std)
-        fig.add_trace(go.Scatter(x=df.index, y=up, mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'))
-        fig.add_trace(go.Scatter(x=df.index, y=low, fill='tonexty', fillcolor=fill_colors[i], line=dict(width=0), showlegend=False, hoverinfo='skip'))
-
-    # B. 繪製 7 條實體平行線 (加上點亮效果)
-    for s_val, color, label in line_configs:
-        y_vals = np.exp(df['Mid_Log'] + s_val * std)
-        fig.add_trace(go.Scatter(
-            x=df.index, y=y_vals, name=label,
-            mode='lines', line=dict(color=color, width=1.5),
-            marker=dict(size=6, opacity=0), # 關鍵：markers 設為透明，在 x-unified 模式會自動出現
-            hovertemplate=f"{label}: %{{y:.2f}}<extra></extra>"
-        ))
-
-    # C. 繪製收盤價線 (白色加粗置頂)
+    # A. 先繪製收盤價線 (白色加粗，置於底層)
     fig.add_trace(go.Scatter(
         x=df.index, y=df['Close'], name="收盤價",
-        mode='lines', line=dict(color='white', width=2.5),
-        marker=dict(size=8, color='white', line=dict(width=2, color='white'), opacity=0),
-        hovertemplate="收盤價: %{y:.2f}<extra></extra>"
+        mode='lines', line=dict(color='white', width=2),
+        hovertemplate="Price: %{y:.2f}"
     ))
 
-    # D. 設定佈局：實現「八點連動」的秘訣
-    fig.update_layout(
-        template="plotly_dark", height=750, margin=dict(t=50, b=0, l=10, r=10),
-        hovermode="x unified", # 這是出現八個小圓圈最關鍵的設定
-        xaxis=dict(showgrid=False, rangeslider=dict(visible=True, thickness=0.04)),
-        yaxis=dict(
-            gridcolor='#23282e', side='right', 
-            type='log', # 這是讓線條變完美直線的關鍵
-            tickformat='.1f'
-        ),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
+    # B. 繪製 7 條標準差線段 (完美直線且平行)
+    for s_val, color, label in line_configs:
+        # 這裡是關鍵：我們只畫線，完全不加填充區 (fill='none')
+        # Plotly 會自動處理 yaxis type='log'，讓對數回歸線在視覺上變直線
+        fig.add_trace(go.Scatter(
+            x=df.index, y=np.exp(df['Mid_Log'] + s_val * std),
+            name=label, mode='lines',
+            line=dict(color=color, width=1.2),
+            hovertemplate=f"{label}: %{{y:.2f}}"
+        ))
 
-    # 確保所有 Trace 都在懸停時顯示 Marker
-    fig.update_traces(hoveron='points', mode='lines+markers')
+    # 5. 設定佈局：實現「極致簡潔」與「直線感」
+    fig.update_layout(
+        template="plotly_dark", height=700,
+        # A. 關鍵：Y軸設為對數 (Log Axis)，這是讓斜率呈現筆直線段的唯一方法
+        yaxis=dict(
+            type='log', gridcolor='#1e2228', side='right', # 網格淡色
+            tickformat='.1f', dtick=np.log10(last_close) / 10 # 自動計算刻度
+        ),
+        xaxis=dict(showgrid=False), # X軸移除網格
+        
+        # B. 移除 Rangeslider (滑塊)，對齊右圖
+        # C. 懸停模式：x unified (八點連動)
+        hovermode="x unified",
+        margin=dict(t=10, b=10, l=10, r=60), # 縮小邊距
+        
+        # D. 圖例置於左上角，垂直排列
+        legend=dict(
+            orientation="v", yanchor="top", y=0.98, 
+            xanchor="left", x=0.01, bgcolor="rgba(0,0,0,0)"
+        )
+    )
 
     st.plotly_chart(fig, use_container_width=True)
 
