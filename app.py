@@ -2,70 +2,108 @@ import streamlit as st
 import yfinance as yf
 import plotly.graph_objects as go
 import pandas as pd
+import numpy as np
+from sklearn.linear_model import LinearRegression
 
-# 網頁基本設定
-st.set_page_config(page_title="美股彩虹圖工具", layout="wide")
-st.title("🌈 美股估值彩虹圖 (v2.0 新版)")
+# 1. 網頁配置：深色主題與寬版
+st.set_page_config(page_title="財富彩虹-雙棲版", layout="wide")
 
-# 使用 Streamlit 快取，避免頻繁請求
-@st.cache_data(ttl=3600)
-def get_data_v2(ticker_symbol):
-    # 根據 yfinance 新版建議：直接呼叫，不自定義 Session
-    ticker = yf.Ticker(ticker_symbol)
-    
-    # 獲取股價
-    df = ticker.history(period="5y")
-    
-    # 獲取 EPS
-    try:
-        # 注意：有些股票可能抓不到 info，我們做個保護
-        val = ticker.info
-        eps = val.get('trailingEps', 0)
-    except:
-        eps = 0
-        
-    return df, eps
+# 套用 CSS 讓介面變深色
+st.markdown("""
+    <style>
+    .main { background-color: #0e1117; color: white; }
+    .stTextInput > div > div > input { background-color: #262730; color: white; }
+    </style>
+    """, unsafe_allow_html=True)
 
-ticker_input = st.text_input("輸入美股代號 (例如: AAPL, TSLA, NVDA):", "AAPL").upper()
+# 2. 側邊欄：功能切換
+with st.sidebar:
+    st.title("🌈 財富彩虹")
+    market_type = st.radio("選擇市場", ["美股 (US)", "台股 (TW)"])
+    ticker_input = st.text_input("輸入代號", "AAPL" if market_type == "美股 (US)" else "2330")
+    period = st.selectbox("時間範圍", ["3y", "5y", "10y"], index=0)
 
-if ticker_input:
-    with st.spinner('正在與 Yahoo Finance 通訊...'):
-        df, eps = get_data_v2(ticker_input)
-    
-    if df.empty:
-        st.error("❌ 無法取得股價數據。")
-        st.info("💡 提示：如果代號正確卻沒資料，可能是 Yahoo 暫時封鎖了 Streamlit Cloud 的 IP。")
-    elif eps <= 0:
-        st.warning(f"⚠️ 已取得股價，但無法取得 {ticker_input} 的 EPS 資料（可能公司虧損中）。")
-        # 即使沒 EPS，我們還是把股價圖畫出來
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name="實際股價", line=dict(color='black')))
-        st.plotly_chart(fig, use_container_width=True)
+    if market_type == "台股 (TW)" and not ticker_input.endswith(".TW"):
+        ticker = f"{ticker_input}.TW"
     else:
-        # 繪製彩虹圖
-        multipliers = [15, 20, 25, 30, 35, 40]
-        colors = ['#1a9850', '#91cf60', '#d9ef8b', '#fee08b', '#fc8d59', '#d73027']
-        labels = ['極度低估', '低估', '合理', '偏高', '高估']
+        ticker = ticker_input
 
-        fig = go.Figure()
-        for i in range(len(multipliers) - 1):
-            fig.add_trace(go.Scatter(
-                x=df.index,
-                y=[eps * multipliers[i+1]] * len(df),
-                fill='tonexty' if i > 0 else 'tozeroy',
-                mode='none',
-                name=f"{labels[i]} ({multipliers[i]}x-{multipliers[i+1]}x)",
-                fillcolor=colors[i],
-                opacity=0.3
-            ))
+# 3. 數據抓取與線性回歸計算
+@st.cache_data(ttl=3600)
+def get_rainbow_data(symbol, period):
+    df = yf.Ticker(symbol).history(period=period)
+    if df.empty: return None
+    
+    # 線性回歸計算
+    df['Date_Index'] = np.arange(len(df))
+    X = df[['Date_Index']].values
+    y = df['Close'].values
+    
+    model = LinearRegression()
+    model.fit(X, y)
+    
+    # 趨勢中線 (Trend Line)
+    df['Trend'] = model.predict(X)
+    # 計算標準差
+    std = (df['Close'] - df['Trend']).std()
+    
+    return df, std
 
-        fig.add_trace(go.Scatter(x=df.index, y=df['Close'], name="實際股價", line=dict(color='black', width=2)))
-        
-        fig.update_layout(
-            hovermode="x unified",
-            xaxis_title="日期",
-            yaxis_title="價格 (USD)",
-            template="plotly_white"
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        st.success(f"✅ 成功載入！{ticker_input} 目前 Trailing EPS: ${eps}")
+data_result = get_rainbow_data(ticker, period)
+
+if data_result:
+    df, std = data_result
+    
+    # 4. 繪製專業彩虹圖
+    fig = go.Figure()
+
+    # 定義五線譜區間 (趨勢線 +- 1sigma, 2sigma)
+    # 左圖通常有：+2σ(紅), +1σ(橘), 中線(綠), -1σ(藍), -2σ(紫)
+    layers = [
+        (2, '極度高估', 'rgba(255, 0, 0, 0.2)'),
+        (1, '高估', 'rgba(255, 165, 0, 0.2)'),
+        (0, '合理', 'rgba(0, 128, 0, 0.2)'),
+        (-1, '低估', 'rgba(0, 0, 255, 0.2)'),
+        (-2, '極度低估', 'rgba(75, 0, 130, 0.2)')
+    ]
+
+    # 繪製填滿區間
+    for i in range(len(layers)-1):
+        upper = df['Trend'] + layers[i][0] * std
+        lower = df['Trend'] + layers[i+1][0] * std
+        fig.add_trace(go.Scatter(
+            x=df.index, y=upper, mode='lines', line=dict(width=0),
+            showlegend=False, hoverinfo='skip'
+        ))
+        fig.add_trace(go.Scatter(
+            x=df.index, y=lower, fill='tonexty', 
+            fillcolor=layers[i][2], line=dict(width=0),
+            name=layers[i][1]
+        ))
+
+    # 實際股價線
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df['Close'],
+        name="收盤價", line=dict(color='white', width=1.5)
+    ))
+
+    # 圖表樣式調整 (仿左圖深色風格)
+    fig.update_layout(
+        template="plotly_dark",
+        height=600,
+        margin=dict(l=20, r=20, t=50, b=20),
+        xaxis=dict(showgrid=False),
+        yaxis=dict(showgrid=True, gridcolor='#333'),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # 下方顯示數據資訊
+    col1, col2, col3 = st.columns(3)
+    col1.metric("當前收盤價", f"{df['Close'].iloc[-1]:.2f}")
+    col2.metric("標準差 (σ)", f"{std:.2f}")
+    col3.metric("資料天數", len(df))
+
+else:
+    st.error("找不到該股票數據，請重新確認代碼。")

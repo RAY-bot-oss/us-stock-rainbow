@@ -1,5 +1,6 @@
-yfinance>=0.2.40
+yfinance
 pandas
 plotly
 streamlit
-curl_cffi
+scikit-learn
+numpy
